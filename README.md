@@ -8,6 +8,7 @@ into any agent's skills directory.
 |---|---|---|
 | [`skills/coordinate/`](skills/coordinate/) | `coordinate` | Delegate implementation to cheap `opencode` agents and act as the reviewing tech lead — contract-first parallel work, verification gates, and a hard commit/push approval gate. |
 | [`skills/teams/`](skills/teams/) | `teams`, `setup-teams` | Drive Microsoft Teams (new web client) via the Playwright MCP and a real Chrome — read, catch up, send, quote-reply, react, @mention. No Microsoft Graph / API. |
+| [`skills/unit-tests/`](skills/unit-tests/) | `unit-tests` | Write, review and prune unit tests that catch real bugs: one exit point per test, one mock, every test names its bug, a never-write list, prune on touch. Stops agent test bloat. Language agnostic. |
 
 Cross-agent (Claude Code, Cursor, Copilot / VS Code, Codex, Windsurf, OpenCode) and cross-platform
 (Windows, macOS, Linux).
@@ -18,6 +19,7 @@ Cross-agent (Claude Code, Cursor, Copilot / VS Code, Codex, Windsurf, OpenCode) 
 npx skills add bftelman/skills                    # everything
 npx skills add bftelman/skills -s coordinate      # one skill
 npx skills add bftelman/skills -s teams
+npx skills add bftelman/skills -s unit-tests
 ```
 
 Needs Node ≥ 22.20. **Manual alternative:** copy the individual skill folder (the one containing
@@ -46,6 +48,9 @@ skills/
     teams/SKILL.md      # the capability
     setup-teams/SKILL.md# one-shot installer
     INSTALL.md
+  unit-tests/
+    SKILL.md            # the skill
+    references/         # grading and prune procedure, per-stack notes
 commands/               # optional native Claude Code slash commands
 ```
 
