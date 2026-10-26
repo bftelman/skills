@@ -26,7 +26,7 @@ $ErrorActionPreference = 'Stop'
 
 # Already listening? Nothing to do.
 try {
-  $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/json/version" -TimeoutSec 3 -UseBasicParsing
+  $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/json/version" -TimeoutSec 1 -UseBasicParsing
   if ($r.StatusCode -eq 200) { Write-Host "CDP already up on http://127.0.0.1:$Port"; exit 0 }
 } catch { }
 
@@ -34,10 +34,12 @@ function Find-Chrome {
   $c = @(
     "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
     "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
-    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe",
+    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
   ) | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $c) { $g = Get-Command chrome.exe -ErrorAction SilentlyContinue; if ($g) { $c = $g.Source } }
-  if (-not $c) { throw "chrome.exe not found. Edit the candidate paths in this script." }
+  if (-not $c) { throw "Chrome/Edge not found. Edit the candidate paths in this script." }
   return $c
 }
 $chrome = Find-Chrome
@@ -63,7 +65,7 @@ $args = @(
   "--remote-debugging-address=127.0.0.1",
   "--user-data-dir=`"$userDataDir`"",
   "--no-first-run","--no-default-browser-check",
-  "https://teams.microsoft.com/v2/"
+  "https://teams.cloud.microsoft/v2/"
 )
 Start-Process -FilePath $chrome -ArgumentList $args | Out-Null
 
