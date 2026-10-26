@@ -1,32 +1,31 @@
-# Selectors — VERIFIED 2026-07-27 (new Teams web, teams.cloud.microsoft)
+# Selectors: verified 2026-10-26 (new Teams web, teams.cloud.microsoft)
 
-All verified live unless marked. Teams animates constantly, so **act via `browser_evaluate`
-(`document.querySelector(...).click()`)** rather than `browser_click`/`hover` (which time out on the
-"stable" check). Use `browser_type` only for the compose box and search input.
+Act via one `browser_evaluate` per action (see SKILL.md → Chat script); Playwright
+`browser_click`/`hover` time out on the "stable" check because Teams animates constantly.
 
-## Confirm which chat is open
-`document.title` → the segment before ` | Microsoft Teams` is the chat name.
-(There is NO working `chat-header-title` data-tid — don't use it.)
+## Open a chat
+| Element | Selector | Notes |
+|---|---|---|
+| Left-list chat | `#title-chat-list-item_<chatId>` → `.closest('[role="treeitem"]').click()` | use `getElementById` (ids contain `:`); text = chat name; favorites + recents only |
+| Chat list loaded | any `[id^="title-chat-list-item_"]` | poll this instead of a fixed wait after navigate |
+| Open chat name | `document.title` = `… \| <chat name> \| Microsoft Teams` | no `chat-header-title` data-tid exists |
+| Search input | `input[data-tid="AUTOSUGGEST_INPUT"]` | fill via native setter `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set` + `InputEvent('input',{bubbles:true})`; plain `fill()` won't trigger suggestions |
+| Result (group/meeting) | `[data-tid$="<chatId>"]` | prefix `AUTOSUGGEST_SUGGESTION_TOPHITS`/`GROUPCHATS` + `19:…@thread.v2` |
+| Result (person → 1:1) | `[data-tid$="8:orgid:<userGuid>"]` | prefix `…TOPHITS`; opens/creates the 1:1 |
+| Dismiss flyout | blur input + dispatch Escape keydown/keyup | flyout lingers over the compose box otherwise |
 
 ## Compose & send
 | Element | Selector | Notes |
 |---|---|---|
-| Compose box | `[data-tid="ckeditor"]` | contenteditable, role textbox, aria "Type a message" |
-| Send | press `Enter` in the editor | or `[data-tid="sendMessageCommands-send"]` |
-
-## Search & navigate (PRIMARY nav)
-| Element | Selector | Notes |
-|---|---|---|
-| Search input | `input[data-tid="AUTOSUGGEST_INPUT"]` | type with real keystrokes (`slowly:true`); `fill()` won't trigger suggestions |
-| Result (group/meeting) | `[data-tid$="<chatId>"]` | prefix `AUTOSUGGEST_SUGGESTION_TOPHITS`/`GROUPCHATS` + `19:…@thread.v2` |
-| Result (person → 1:1) | `[data-tid$="8:orgid:<userGuid>"]` | prefix `…TOPHITS`; opens/creates the 1:1 |
-| Dismiss flyout | blur input + dispatch Escape keydown/keyup, then focus `[data-tid="ckeditor"]` | flyout lingers otherwise |
+| Compose box | `[data-tid="ckeditor"]` | CKEditor 5; write through `.ckeditorInstance.model` (raw DOM edits are reverted); soft break = `ck.execute('shiftEnter')`; clear = `ck.setData('')` |
+| Send | `[data-tid$="MessageCommands-send"]` | `newMessageCommands-send` on cold load, `sendMessageCommands-send` later; re-click while the editor is non-empty: on a cold load Teams ignores the first click until its draft state syncs; the editor empties on send, so no double send |
+| Verify sent | editor empty AND last `[data-tid="chat-pane-message"]` contains the text | |
 
 ## Messages
 | Element | Selector | Notes |
 |---|---|---|
-| Message row | `[data-tid="chat-pane-message"]` | match on text; last match = most recent |
-| Message pane (scroll) | `[data-tid="message-pane-list-viewport"]` | fallback `[role="main"]`; read `.innerText` |
+| Message row | `[data-tid="chat-pane-message"]` | match on text; last match = most recent; body only (no author) |
+| Message pane (scroll) | `[data-tid="message-pane-list-viewport"]` | fallback `[role="main"]`; `.innerText` interleaves author, time, body |
 | More-options menu (per msg) | `[data-tid="message-actions-menu-hidden-button"]` | dispatch `mouseenter/over/move` first, then `.click()` |
 
 ## Quote-reply
@@ -51,7 +50,7 @@ Open the message's more-options menu → click the `role="menuitem"` matching `/
 | Person option | `[data-tid="autocomplete-picker-item-<Full Name>"]` (role option) | `…-Everyone` notifies all |
 | Inserted chip (verify) | `[itemtype="http://schema.skype.com/Mention"]` wrapping `<mention mri="8:orgid:<guid>">` | a real tagged mention, not text |
 
-## CDP / connection
+## CDP / connection (CDP mode only)
 - Debug Chrome must listen on IPv4 `127.0.0.1:9222`; MCP endpoint must be `http://127.0.0.1:9222`
   (not `localhost` → IPv6 `::1` refuses).
 - `ECONNREFUSED …:9222` mid-run = the debug Chrome window was closed → relaunch `teams-chrome.ps1`.

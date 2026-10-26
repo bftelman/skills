@@ -11,7 +11,7 @@ set -euo pipefail
 PORT="${1:-9222}"
 
 # Already up? nothing to do.
-if curl -fsS -m 3 "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1; then
+if curl -fsS -m 1 "http://127.0.0.1:${PORT}/json/version" >/dev/null 2>&1; then
   echo "CDP already up on http://127.0.0.1:${PORT}"; exit 0
 fi
 

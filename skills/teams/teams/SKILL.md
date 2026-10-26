@@ -5,20 +5,13 @@ description: Use when the user wants to read, catch up on, send, reply to, react
 
 # Teams (Playwright MCP)
 
-Operate Microsoft Teams by driving Chrome/Chromium with the **Playwright MCP**. No Graph / MS365 API.
-Runs on the **new Teams web** (`https://teams.cloud.microsoft/v2/`).
+Operate Microsoft Teams web (`https://teams.cloud.microsoft/v2/`) through the **Playwright MCP**. No
+Graph / MS365 API. Verified: read, send, quote-reply, react, @mention. Chats only (no calls, files,
+channel posts).
 
-**Capabilities (verified working):** read / catch-up, send, quote-reply, react (emoji), @mention.
-**Not built:** calls, file share/download, channel (team) posts. Chats only.
-
-**Cross-agent / cross-platform.** The steps use the Playwright MCP's own tool names
-(`browser_navigate`, `browser_snapshot`, `browser_evaluate`, `browser_type`, `browser_press_key`,
-`browser_hover`, `browser_wait_for`). Your agent may namespace them — e.g. Claude Code exposes them
-as `mcp__playwright__browser_*`, other agents (Cursor, Copilot, Codex, Windsurf…) expose the same
-tools under their own prefix. Map the bare names below to whatever your runtime calls them. The
-`browser_evaluate` (run-JS) tool is required — most flows here act via `document.querySelector(...)`
-to stay reliable and cheap. Chrome launch is OS-specific (see Step 0); everything else is identical
-on Windows, macOS, and Linux.
+Tool names below are the MCP's bare names (`browser_evaluate`, `browser_navigate`, `browser_type`…);
+Claude Code exposes them as `mcp__playwright__browser_*`, other agents under their own prefix.
+`browser_evaluate` is required: every flow runs as one in-page async function.
 
 ## Core rules
 
@@ -26,157 +19,163 @@ on Windows, macOS, and Linux.
    emoji + which message) and WAIT for explicit approval. Override only if the user said "just send
    it" for that specific message. Re-confirm each new message. Reactions and @mentions notify people
    too — gate them. Safe end-to-end test target: **Notes to self** (`48:notes`).
-2. **Navigate by search-and-click**, not hash-URL (the SPA ignores `#`-only navigations).
-3. **Prefer targeted `browser_evaluate` over `browser_snapshot`.** Teams snapshots are huge and the
-   page animates constantly (Playwright `click`/`hover`/`type` often time out on the "stable" check).
-   The reliable pattern is `browser_evaluate` with `document.querySelector(...).click()` — it bypasses
-   the stability wait. Use `browser_type` only for the compose box and search input; use screenshots
-   only when the user wants to see something.
-4. **Verify the open chat via `document.title`** — the segment before ` | Microsoft Teams` is the
-   chat name. (`[data-tid="chat-header-title"]` does NOT exist — don't rely on it.)
+2. **One call per action.** Each Playwright call costs a model round trip (~2-3s), which dominates
+   runtime; fixed `browser_wait_for` sleeps and `browser_type slowly` add more. Do the whole flow
+   (open + verify + type + send + verify) in ONE `browser_evaluate` that polls selectors. Use
+   `browser_click`/`hover`/`type` only where noted: Teams animates constantly, so they time out on
+   Playwright's "stable" check. Never take snapshots or screenshots unless the user wants to see.
+3. **Never navigate when the tab is already on Teams.** A reload costs ~4s plus SPA boot. Navigate
+   only on the first Teams action of the agent session, or when the script returns `step:'navigate'`.
+   Never use hash-URL navigation (the SPA ignores `#`-only changes).
+4. **Verify the open chat via `document.title`** (`… | <chat name> | Microsoft Teams`). There is no
+   `chat-header-title` data-tid.
 
-## First-time setup (one command)
+Measured 2026-10-26, one send to Notes to self: old flow 34.7s / 13 calls; warm fast path 6.0s /
+1 call (1.4s in page); cold (fresh browser) 9.1s / 2 calls.
 
-New user / empty `chats.md`? Don't walk them through steps manually — run the automated setup:
-- **Claude Code:** `/setup-teams` (command bundled with this skill).
-- **Any agent:** the user says **"set up Teams"** → do it yourself: perform Step 0 (configure MCP if
-  needed, launch Chrome, verify, one-time login), then the chat-seeding bootstrap
-  ("Setup — seed chats.md…"), then confirm. Only pause for the two unavoidable human moments: an
-  agent restart after adding the MCP server, and the one-time Teams login. Everything else is
-  automatic and idempotent.
+## Connect
 
-## Step 0 — Connect (before anything, every run)
+- **First Teams action in this agent session:** `browser_navigate` `https://teams.cloud.microsoft/v2/`,
+  then run the chat script right away (it waits for the SPA itself, no `browser_wait_for`).
+- **Afterwards:** run the chat script directly. The MCP's browser and tab stay open for the life of
+  the MCP process.
+- **Browser mode** depends on the MCP config:
+  - `--browser msedge` (or chrome): the MCP launches its own persistent-profile browser. No launcher.
+  - `--cdp-endpoint http://127.0.0.1:9222`: attaches to a debug Chrome. On `ECONNREFUSED …:9222`
+    run the launcher (Windows `pwsh -File "<skill-dir>/teams-chrome.ps1"`, macOS/Linux
+    `bash "<skill-dir>/teams-chrome.sh"`), then navigate. Both exit at once if the port is up, use a
+    dedicated profile, and bind IPv4 (`localhost` resolves to `::1` and is refused). The connection
+    drops when the user closes that window; relaunch, the profile stays signed in. One-time MCP
+    config the skill can't self-heal: `claude mcp add -s user playwright -- npx @playwright/mcp@latest
+    --cdp-endpoint http://127.0.0.1:9222` (other agents: same command/args in their MCP config).
+- `step:'sign-in'` → ask the user to log into Teams once in that browser window (persists).
+  **Never enter credentials.**
 
-1. **Ensure debug Chrome is up and attached.** Try a light `browser_navigate` to
-   `https://teams.cloud.microsoft/v2/`. If it errors with `ECONNREFUSED ...:9222`, the browser's
-   debug port is down — **launch it yourself** (no user action), picking the launcher for the OS
-   (detect via the environment / `uname`):
-   - **Windows:** `pwsh -File "<skill-dir>/teams-chrome.ps1"` (or `powershell -File …`).
-   - **macOS / Linux:** `bash "<skill-dir>/teams-chrome.sh"` (`chmod +x` once if needed).
-   Both are idempotent (exit 0 if already up), use a **dedicated** profile that never touches the
-   user's main browser, bind IPv4 `127.0.0.1:9222`, and wait for the port. Then retry `browser_navigate`.
-   `<skill-dir>` is wherever this skill is installed (Claude Code: `~/.claude/skills/teams`; other
-   agents use their own skills path).
-   - The Playwright MCP server must be configured to attach over CDP:
-     `--cdp-endpoint http://127.0.0.1:9222` (IPv4, not `localhost` → resolves to IPv6 `::1` and
-     refuses). This is a one-time per-agent MCP config the skill can't self-heal. Examples:
-     Claude Code → `claude mcp add -s user playwright -- npx @playwright/mcp@latest --cdp-endpoint
-     http://127.0.0.1:9222`; other agents → add the same command/args in their MCP config
-     (`.cursor/mcp.json`, `.vscode/mcp.json`, `~/.codeium/windsurf/mcp_config.json`, etc.). If the
-     endpoint is still `localhost`, tell the user to switch it to `127.0.0.1` and restart.
-   - **The connection drops when the user closes that browser window.** If any action mid-run throws
-     `ECONNREFUSED`, re-run the launcher and re-navigate — the dedicated profile stays logged in.
-2. **Confirm sign-in.** After navigate, wait for load (`browser_wait_for` textGone
-   "We're setting things up for you", or ~5s) and check `document.title`. If it's the Microsoft
-   sign-in page / no chat list, the dedicated profile isn't signed in yet: ask the user to log into
-   Teams once in that Chrome window (persists for every later run). **Never enter credentials.**
+## Chat script (open, read, send)
 
-## Setup — seed chats.md from the chat list (first run, no API)
+Fill the four constants and run with `browser_evaluate`. `ID`/`NAME` come from `chats.md`.
+- **Read:** `TEXT = ''`. Returns the last `READ` lines of the pane (author, time and body interleaved).
+  Reading marks messages read; say so if it matters.
+- **Send:** run the Safety Gate first (chat + exact text), then run with `TEXT` set. The script refuses
+  if the title does not match or the chat already has a draft. Multi-line works (`\n` → soft break);
+  URLs auto-link.
 
-When `chats.md` is empty (or the user says "set up my chats" / "import my chats"), bootstrap it
-straight from the browser — no MS365/Graph needed. The left chat list (favorites + recents) exposes
-each chat's id in its DOM. `browser_evaluate`:
 ```js
-() => {
-  const idRe=/19:[^"'\s]+@thread\.v2|48:notes|19:[0-9a-f-]+_[0-9a-f-]+@unq\.gbl\.spaces/;
-  return [...document.querySelectorAll('[role="tree"] [role="treeitem"]')].map(el=>{
-    let id=null;
-    for(const n of [el,...el.querySelectorAll('*')]){ for(const a of n.attributes||[]){ const m=(a.value||'').match(idRe); if(m){id=m[0];break;} } if(id)break; }
-    const leaf=[...el.querySelectorAll('*')].find(n=>n.children.length===0 && n.textContent.trim());
-    return {name: leaf?leaf.textContent.trim():'', id};
-  }).filter(x=>x.id && x.name);
+async () => {
+  const ID = '48:notes';            // chat id, or 8:orgid:<guid> for a person
+  const NAME = 'Notes to self';     // search fallback + title check when not in the left list
+  const TEXT = '';                  // '' = read
+  const READ = 40;
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const until = async (f, ms = 15000) => {
+    const t = Date.now();
+    while (Date.now() - t < ms) { const v = f(); if (v) return v; await sleep(50); }
+    return null;
+  };
+  const hits = () => [...document.querySelectorAll('[data-tid^="AUTOSUGGEST_SUGGESTION_TOPHITS"],[data-tid^="AUTOSUGGEST_SUGGESTION_GROUPCHATS"]')];
+  const t0 = Date.now();
+
+  if (!location.host.endsWith('teams.cloud.microsoft')) return { ok: false, step: 'navigate' };
+  if (!await until(() => document.querySelector('[id^="title-chat-list-item_"]'), 30000)) {
+    return { ok: false, step: /login\.microsoftonline/.test(location.href) ? 'sign-in' : 'chat list not loaded' };
+  }
+
+  const label = document.getElementById('title-chat-list-item_' + ID);
+  let expected = NAME;
+  if (label) {
+    expected = label.textContent.trim();
+    label.closest('[role="treeitem"]').click();
+  } else {
+    const s = document.querySelector('input[data-tid="AUTOSUGGEST_INPUT"]');
+    s.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(s, NAME);
+    s.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    const hit = await until(() => hits().find(e => e.dataset.tid.endsWith(ID))
+      || hits().find(e => e.dataset.tid.includes('8:orgid:') && e.innerText.split('\n')[0].trim() === NAME), 8000);
+    if (!hit) return { ok: false, step: 'not found', hits: hits().map(e => e.dataset.tid + ' | ' + e.innerText.split('\n')[0]) };
+    hit.click();
+    s.blur();
+    ['keydown', 'keyup'].forEach(t => s.dispatchEvent(new KeyboardEvent(t, { key: 'Escape', keyCode: 27, bubbles: true })));
+  }
+  if (!await until(() => document.title.includes(expected))) return { ok: false, step: 'title', title: document.title };
+
+  const msgs = () => [...document.querySelectorAll('[data-tid="chat-pane-message"]')];
+  if (!TEXT) {
+    await until(() => msgs().length);
+    const pane = document.querySelector('[data-tid="message-pane-list-viewport"]') || document.querySelector('[role="main"]');
+    pane.scrollTop = pane.scrollHeight;
+    await sleep(300);
+    return { ok: true, chat: document.title, lines: pane.innerText.split('\n').filter(Boolean).slice(-READ) };
+  }
+
+  const ed = await until(() => document.querySelector('[data-tid="ckeditor"]')?.ckeditorInstance && document.querySelector('[data-tid="ckeditor"]'));
+  const ck = ed.ckeditorInstance;
+  if (ed.textContent.trim()) return { ok: false, step: 'draft present', draft: ed.innerText };
+  ck.editing.view.focus();
+  TEXT.split('\n').forEach((line, i) => {
+    if (i) ck.execute('shiftEnter');
+    ck.model.change(w => w.insertText(line, ck.model.document.selection.getFirstPosition()));
+  });
+  await sleep(200);
+  if (ed.innerText.trim() !== TEXT.trim()) return { ok: false, step: 'type', got: ed.innerText };
+  for (let i = 0; i < 5 && ed.textContent.trim(); i++) {
+    document.querySelector('[data-tid$="MessageCommands-send"]')?.click();
+    await until(() => !ed.textContent.trim(), 1500);
+  }
+  const posted = await until(() => msgs().pop()?.innerText.includes(TEXT.split('\n')[0]), 10000);
+  return { ok: !!posted, chat: document.title, ms: Date.now() - t0 };
 }
 ```
-Show the user the resulting name→id list, let them keep the ones they want (their "most used"), and
-write those rows into `chats.md`. Scroll the chat list and re-run to capture more. This is the
-recommended onboarding step; the MS365 `teams_list_chats` tool is an optional alternative when present.
 
-## Navigate to a chat (search-and-click — PRIMARY)
+Chats outside the left list fall back to an instant search (~0.5s). On `step:'not found'` pick the
+right hit from the returned list and offer to add its id to `chats.md`. Why each odd step exists
+(CKEditor model, send-button retry, native setter) is in `selectors.md`.
 
-1. Type the chat/person name into the search box with **real keystrokes**:
-   `browser_type` target `input[data-tid="AUTOSUGGEST_INPUT"]`, `slowly: true` (a plain `fill()`
-   does NOT trigger suggestions). If the box has leftover text, `fill('')` first, then type slowly.
-2. `browser_wait_for` ~2s, then read results with `browser_evaluate`:
-   `[...document.querySelectorAll('[data-tid^="AUTOSUGGEST_SUGGESTION_"]')]` → each result's
-   `data-tid` **embeds the target id**:
-   - Group/meeting chat: `…TOPHITS<chatId>` or `…GROUPCHATS<chatId>` where `<chatId>` = `19:…@thread.v2`.
-   - 1:1 with a person: the person hit `…TOPHITS8:orgid:<userGuid>` (opens/creates the 1:1).
-3. Click by **id suffix** (matches both result types):
-   `document.querySelector('[data-tid$="<id>"]').click()` via `browser_evaluate`.
-4. **Confirm** `document.title` shows the expected chat. Then dismiss the search flyout (below).
-5. Fallback if a name isn't in `chats.md`: same flow, just read the human-readable result labels to
-   pick the right one; offer to add the resolved id to `chats.md`.
+## Setup: seed chats.md from the chat list (first run, no API)
 
-Deep-link (`…/#/conversations/<id>?ctx=chat`) works ONLY on a fresh full page load, not for
-switching chats in a loaded session — don't rely on it.
-
-### Dismiss the search flyout (after selecting)
-
-The suggestions flyout lingers over the compose box. Clear it via `browser_evaluate`:
+When `chats.md` is empty or the user says "set up my chats", read ids from the left list (favorites +
+recents) with `browser_evaluate`:
 ```js
-const s=document.querySelector('input[data-tid="AUTOSUGGEST_INPUT"]');
-if(s){ s.blur(); ['keydown','keyup'].forEach(t=>s.dispatchEvent(new KeyboardEvent(t,{key:'Escape',keyCode:27,bubbles:true}))); }
-document.querySelector('[data-tid="ckeditor"]')?.focus();
+() => [...document.querySelectorAll('[id^="title-chat-list-item_"]')]
+  .map(s => ({ name: s.textContent.trim(), id: s.id.replace('title-chat-list-item_', '') }))
 ```
+Show the name→id list, keep the ones the user wants, write those rows into `chats.md`. Scroll the
+list and rerun to capture more. MS365 `teams_list_chats` is an optional alternative when present.
+New user? `/setup-teams` (or "set up Teams") runs connect, one-time login and this seeding in one go.
 
-## Read / catch up
+## Quote-reply, react, @mention
 
-`browser_evaluate`: scroll the pane to bottom and read `innerText`, e.g.
-`document.querySelector('[data-tid="message-pane-list-viewport"]')` (fallback `[role="main"]`) →
-`.scrollTop = .scrollHeight`, then return the last ~30–40 lines of `.innerText`. Rendered text
-interleaves author + timestamp + body ("Ruslan Hagverdi 5:43 PM Qosdun?"), which is enough to
-summarize who said what and what needs a reply. Reading marks messages read — say so if it matters.
+These need a target message or real keystrokes, so they take 2-3 calls; still batch everything else
+into each `browser_evaluate`, and open the chat with the chat script (`TEXT = ''`, `READ = 1`) first.
 
-## Send a message
+**Find a message** (shared step): `msgs()` as above, match on text (last match = most recent), tag it
+`el.setAttribute('data-cc-target','x')`, `scrollIntoView()`, dispatch `mouseenter/over/move`, then
+`.click()` its `[data-tid="message-actions-menu-hidden-button"]`.
 
-1. Navigate to the chat; confirm via `document.title`.
-2. `browser_type` into `[data-tid="ckeditor"]` (contenteditable, aria "Type a message").
-3. Verify text via `browser_evaluate` (`ckeditor.textContent`).
-4. **SAFETY GATE.**
-5. Send: focus editor, `browser_press_key` `Enter`.
-6. **Verify posted:** `browser_evaluate` — editor is empty AND the message text appears in the pane.
+- **Quote-reply:** in the same call, click the `role="menuitem"` matching `/reply with quote|^reply/i`,
+  then insert the reply via `ckeditorInstance` as in the chat script. Safety Gate, then send + verify
+  (the send part of the chat script).
+- **React:** Safety Gate (target + emoji) first. In the same call open the menu and click
+  `[data-tid="message-actions-like"]` / `-heart` / `-laugh` / `-surprised`, or
+  `[data-tid="add-reaction-picker-entry-point-button"]` for the full picker. Verify the message now
+  has `[data-tid="diverse-reaction-summary"]`.
+- **@mention:** the picker needs real keystrokes. Focus the editor, `browser_type` `@<name>` into
+  `[data-tid="ckeditor"]` with `slowly: true`, then one `browser_evaluate` that polls for
+  `[data-tid="autocomplete-picker-item-<Full Name>"]` (inside `[data-tid="AutocompletePopup-Mentions"]`;
+  `…-Everyone` notifies all), clicks it and inserts the rest of the text via the model. It becomes a
+  real tagged mention (`<mention mri="8:orgid:<guid>">`), not text. Safety Gate, then send + verify.
+  If asked NOT to send, leave the draft or clear it with `ckeditorInstance.setData('')`.
 
-## Quote-reply to a specific message
-
-1. Find the message: `[...document.querySelectorAll('[data-tid="chat-pane-message"]')]`, match on
-   text (last match = most recent); tag it (`el.setAttribute('data-cc-target','x')`), `scrollIntoView`.
-2. Open its menu: click `[data-tid="message-actions-menu-hidden-button"]` (dispatch
-   `mouseenter/over/move` first). Via `browser_evaluate .click()`.
-3. Click the menu item whose label matches `/reply with quote|^reply/i` (role `menuitem`).
-4. The compose box now shows the quoted reference. Type the reply into `[data-tid="ckeditor"]`,
-   Safety Gate, then send (Enter) and verify.
-
-## React with emoji
-
-1. Find + tag the target message (as above). Open `[data-tid="message-actions-menu-hidden-button"]`.
-2. The menu's top row is the reactions bar. Click one via `browser_evaluate .click()`:
-   `[data-tid="message-actions-like"]` (👍) / `-heart` / `-laugh` / `-surprised`, or
-   `[data-tid="add-reaction-picker-entry-point-button"]` for the full picker.
-3. Safety Gate (confirm target + emoji) before clicking.
-4. **Verify:** the message now has `[data-tid="diverse-reaction-summary"]` / "N … reaction" text.
-
-## @mention someone
-
-1. Focus `[data-tid="ckeditor"]`. Type `@<name>` with **real keystrokes**
-   (`browser_type slowly: true`) — the picker needs keystrokes.
-2. `browser_wait_for` ~2s. The picker is `[data-tid="AutocompletePopup-Mentions"]`; each person is
-   `[data-tid="autocomplete-picker-item-<Full Name>"]` (role `option`); `…-Everyone` notifies all.
-3. Click the person option (`browser_evaluate .click()`). It inserts a real tagged mention:
-   `<readonly itemtype="http://schema.skype.com/Mention"><mention mri="8:orgid:<guid>">Name</mention></readonly>`
-   — not plain text.
-4. Continue typing the rest of the message, Safety Gate, send + verify. (If asked NOT to send, leave
-   it or `fill('')` to clear the draft.)
-
-## Red flags — STOP
+## Red flags: STOP
 
 - About to send/react/insert-a-notifying-mention before the user said yes → STOP, run the gate.
-- `ECONNREFUSED …:9222` → relaunch `teams-chrome.ps1`, re-navigate; don't give up.
-- Sign-in page after navigate → STOP, ask the user to log into Teams in that window (never auto-login).
-- A hardcoded selector missed → discover the real one via `browser_evaluate` and self-heal `selectors.md`.
+- `step:'sign-in'` → STOP, ask the user to log in in that window (never auto-login).
+- `step:'title'` or `'draft present'` → STOP, report; never type into an unconfirmed chat or over a draft.
+- A selector missed → discover the real one via `browser_evaluate` and self-heal `selectors.md`.
 
 ## Files
 
-- `chats.md` — friendly-name → chat-id map (per-user; seed via the "set up my chats" bootstrap).
-- `selectors.md` — verified `data-tid` selectors + the flows above.
-- `teams-chrome.ps1` — Windows launcher for debug Chrome (dedicated profile, IPv4 9222).
-- `teams-chrome.sh` — macOS/Linux launcher (same behavior).
+- `chats.md`: friendly-name → chat-id map (per user).
+- `selectors.md`: verified `data-tid` selectors.
+- `teams-chrome.ps1` / `teams-chrome.sh`: debug-Chrome launchers for CDP mode (Windows / macOS+Linux).
