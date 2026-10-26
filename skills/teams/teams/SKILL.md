@@ -1,6 +1,6 @@
 ---
 name: teams
-description: Use when the user wants to read, catch up on, send, reply to, react to, or @mention in Microsoft Teams chat messages ("check Teams", "any messages in <chat>", "reply in <chat>", "message the <X> chat", "react to that message", "@mention someone", "catch me up on Teams"). Drives the new Teams web (teams.cloud.microsoft) in Chrome via the Playwright MCP — no Graph/API. Chat ids in chats.md; verified selectors in selectors.md.
+description: Use when the user wants to read, catch up on, send, reply to, react to, or @mention in Microsoft Teams chat messages ("check Teams", "any messages in <chat>", "reply in <chat>", "message the <X> chat", "react to that message", "@mention someone", "catch me up on Teams"), or to run autopilot on a chat (watch it and keep replying on the user's behalf). Drives the new Teams web (teams.cloud.microsoft) in Chrome via the Playwright MCP — no Graph/API. Chat ids in chats.md; verified selectors in selectors.md.
 ---
 
 # Teams (Playwright MCP)
@@ -19,6 +19,7 @@ Claude Code exposes them as `mcp__playwright__browser_*`, other agents under the
    emoji + which message) and WAIT for explicit approval. Override only if the user said "just send
    it" for that specific message. Re-confirm each new message. Reactions and @mentions notify people
    too — gate them. Safe end-to-end test target: **Notes to self** (`48:notes`).
+   The only exception is **Autopilot** (below), which the user starts explicitly for one chat.
 2. **One call per action.** Each Playwright call costs a model round trip (~2-3s), which dominates
    runtime; fixed `browser_wait_for` sleeps and `browser_type slowly` add more. Do the whole flow
    (open + verify + type + send + verify) in ONE `browser_evaluate` that polls selectors. Use
@@ -167,9 +168,16 @@ into each `browser_evaluate`, and open the chat with the chat script (`TEXT = ''
   real tagged mention (`<mention mri="8:orgid:<guid>">`), not text. Safety Gate, then send + verify.
   If asked NOT to send, leave the draft or clear it with `ckeditorInstance.setData('')`.
 
+## Autopilot
+
+When the user asks to run autopilot on a chat (watch it and keep replying as them), read
+`autopilot.md` and follow it. It is the only flow that sends without a per-message gate, and only in
+the one chat the user named.
+
 ## Red flags: STOP
 
-- About to send/react/insert-a-notifying-mention before the user said yes → STOP, run the gate.
+- About to send/react/insert-a-notifying-mention before the user said yes → STOP, run the gate
+  (unless autopilot is running for that chat and it is a plain reply).
 - `step:'sign-in'` → STOP, ask the user to log in in that window (never auto-login).
 - `step:'title'` or `'draft present'` → STOP, report; never type into an unconfirmed chat or over a draft.
 - A selector missed → discover the real one via `browser_evaluate` and self-heal `selectors.md`.
@@ -178,4 +186,5 @@ into each `browser_evaluate`, and open the chat with the chat script (`TEXT = ''
 
 - `chats.md`: friendly-name → chat-id map (per user).
 - `selectors.md`: verified `data-tid` selectors.
+- `autopilot.md`: autopilot flow, hand-back rules and the watch script.
 - `teams-chrome.ps1` / `teams-chrome.sh`: debug-Chrome launchers for CDP mode (Windows / macOS+Linux).

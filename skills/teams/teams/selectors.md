@@ -25,6 +25,10 @@ Act via one `browser_evaluate` per action (see SKILL.md → Chat script); Playwr
 | Element | Selector | Notes |
 |---|---|---|
 | Message row | `[data-tid="chat-pane-message"]` | match on text; last match = most recent; body only (no author) |
+| Message id | `data-mid` on the message row | increasing number; `id="message-body-<mid>"` |
+| Author | `#author-<mid>` | only on the first message of a run by one author; carry it forward |
+| Own message | row `.closest('.fui-ChatMyMessage')` | others are under `.fui-ChatMessage` |
+| Message text | `#content-<mid>` | body without author/time |
 | Message pane (scroll) | `[data-tid="message-pane-list-viewport"]` | fallback `[role="main"]`; `.innerText` interleaves author, time, body |
 | More-options menu (per msg) | `[data-tid="message-actions-menu-hidden-button"]` | dispatch `mouseenter/over/move` first, then `.click()` |
 
